@@ -1,6 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "looper",
+  "description": "Home of the looper plugin: an autonomous plan-execute-validate loop with per-file backups and a fail-closed database/infrastructure permission gate.",
   "owner": {
     "name": "Arvind Abraham",
     "url": "https://github.com/arvindeybram"
