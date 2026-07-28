@@ -6,6 +6,12 @@ An autonomous **plan → execute → validate-until-clean** loop skill for [Clau
 
 It also drives loops whose validation gate is a slow **external** system (CI, cloud eval, remote review): it self-paces re-checks and distinguishes genuine failures from transient infrastructure ones (see Phase 5b in the skill).
 
+## Demo
+
+![looper demo](docs/looper-demo.gif)
+
+*Illustrative run: `/looper` plans the task (Opus), clears the permission gate, backs up the files it will touch, executes (Sonnet), then re-validates with a fresh agent each iteration until every check passes.*
+
 ## Contents
 
 | Path | What it is |
