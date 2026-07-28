@@ -1,64 +1,141 @@
-# looper
+# Looper
 
-An autonomous **plan → execute → validate-until-clean** loop skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+**Claude Code says it's done. It isn't.** The tests it "ran" were the two it
+remembered writing, it quietly edited a config it shouldn't have touched, and you
+find out forty minutes later.
 
-`/looper <task>` runs a task through a disciplined loop: an Opus agent plans it (with an explicit validation section, edge-case review, and a read/modify touch list), a Sonnet agent executes it, and a fresh Sonnet validator re-runs every check each iteration until the verdict is clean (up to 10 iterations). It backs up every file before editing it, and a mechanical PreToolUse guard blocks database and infrastructure writes until you explicitly approve them.
+Looper is a plan-execute-validate loop that closes that gap. A planning pass
+writes an explicit validation contract before any code is touched, a fresh
+validator actually runs every check each round (it never grades its own work),
+and a mechanical guard blocks database and infrastructure writes until you
+approve them. It also backs up every file before it changes it.
 
-It also drives loops whose validation gate is a slow **external** system (CI, cloud eval, remote review): it self-paces re-checks and distinguishes genuine failures from transient infrastructure ones (see Phase 5b in the skill).
+![Looper demo](docs/looper-demo.gif)
 
-## Demo
+## Why it exists
 
-![looper demo](docs/looper-demo.gif)
+Autonomous coding loops fail in three predictable ways:
 
-*Illustrative run: `/looper` plans the task (Opus), clears the permission gate, backs up the files it will touch, executes (Sonnet), then re-validates with a fresh agent each iteration until every check passes.*
+- **False done.** The agent declares success against checks it invented, not the
+  ones that prove the task.
+- **Silent blast radius.** A run meant to touch one file restarts a service,
+  truncates a table, or rewrites a config, and nothing stops it.
+- **No undo.** Files are edited in place with no snapshot to roll back to.
 
-## Contents
+Looper answers each mechanically, not with a prompt that says "please be careful":
 
-| Path | What it is |
-|------|------------|
-| `skills/looper/SKILL.md` | The skill definition (the loop's phases and policies). |
-| `hooks/looper-db-guard.py` | PreToolUse(Bash) guard that mechanically blocks DB/infra write commands while a looper task is armed, until approval is recorded. Scoped per (session, task). |
+| Failure | Looper's answer |
+|---------|-----------------|
+| False done | The plan must contain a runnable **Validation section**; a **fresh** validator runs it every round and returns evidence, not a claim. |
+| Silent blast radius | A PreToolUse hook **fail-closes** on DB/infra writes and pauses for your explicit approval, scoped to this session and task. |
+| No undo | Every existing file is copied to `.looper-backups/<timestamp>/` before the first edit. |
+
+## How it works
+
+1. **Plan (Opus).** Produces a step plan with a Validation section, an edge-case
+   review, and a Touch list tagging every file/table/service as `read-only` or
+   `modifies`. A second Opus pass critiques it.
+2. **Permission gate.** If the Touch list includes any write to ClickHouse,
+   MySQL, Postgres, SQLite, or Elasticsearch content, or any infrastructure
+   change, Looper stops and asks you exactly what will be modified. Nothing
+   destructive happens without a fresh approval.
+3. **Backup.** Every file is snapshotted before its first edit.
+4. **Execute (Sonnet).** Implements the approved plan.
+5. **Validate until clean (Sonnet).** A fresh validator runs every check each
+   iteration; failures go to a fixer; then it fully re-validates. Up to 10 fix
+   cycles, then it stops and reports honestly rather than claiming success.
+
+There is also an external-gate mode (Phase 5b) for loops whose validator is a
+slow async system such as CI or a cloud eval, which self-paces re-checks and
+tells genuine failures apart from transient infrastructure ones.
+
+## The guard
+
+The permission gate is enforced by a mechanical PreToolUse hook, not by asking
+the model nicely. It is **fail-closed** on database clients: if a client
+(`clickhouse-client`, `mysql`, `psql`, `sqlite3`) is invoked and the SQL is not
+visibly a pure read, it is blocked, including the cases a naive keyword filter
+misses:
+
+```
+mysql mydb < migration.sql            # blocked (SQL hidden in a file)
+cat migration.sql | mysql mydb        # blocked (piped in)
+clickhouse-client --queries-file x.sql# blocked (file flag)
+sqlite3 app.db ".read migration.sql"  # blocked (dot-read)
+
+mysql -e "SELECT * FROM users"        # allowed (visible read)
+echo "SELECT 1" | clickhouse-client   # allowed (visible read)
+```
+
+Read the full threat model, including the deliberate fail-open-on-crash behavior
+and what the guard is **not**, in [SECURITY.md](SECURITY.md).
 
 ## Install
 
-1. Copy the skill and hook into your Claude Code config:
-
-   ```bash
-   mkdir -p ~/.claude/skills ~/.claude/hooks
-   cp -r skills/looper ~/.claude/skills/looper
-   cp hooks/looper-db-guard.py ~/.claude/hooks/looper-db-guard.py
-   chmod +x ~/.claude/hooks/looper-db-guard.py
-   ```
-
-2. Register the guard as a `PreToolUse` hook in `~/.claude/settings.json` (merge into any existing `hooks` block):
-
-   ```json
-   {
-     "hooks": {
-       "PreToolUse": [
-         {
-           "matcher": "Bash",
-           "hooks": [
-             { "type": "command", "command": "python3 \"$HOME/.claude/hooks/looper-db-guard.py\"" }
-           ]
-         }
-       ]
-     }
-   }
-   ```
-
-   The guard is what makes `looper-guard arm/grant/disarm/status` work. Without it registered, those are no-ops and the mechanical DB/infra protection is inactive (the loop still runs; it just loses the hard guardrail).
-
-3. Restart Claude Code (or start a new session) so the skill and hook are picked up.
-
-## Use
+**Plugin (recommended):**
 
 ```
-/looper <describe the task>
+/plugin marketplace add arvindeybram/looper
+/plugin install looper@looper
 ```
 
-The only question the loop will ever ask you is the mandatory permission gate: before it writes to ClickHouse, MySQL, SQLite, or Elasticsearch content, or touches infrastructure (systemd, cron, service restarts, etc.), it stops and asks you to approve exactly what will be modified. Everything else it does autonomously, recording assumptions as it goes.
+<details>
+<summary>Manual install (no plugin system)</summary>
 
-## How the guard works
+```bash
+# Skill
+mkdir -p ~/.claude/skills/looper
+cp plugins/looper/skills/looper/SKILL.md ~/.claude/skills/looper/
 
-While a task is armed (`looper-guard arm <slug>`), the hook inspects every Bash command and denies DB/infra writes (SQL `INSERT/ALTER/DROP/...` via `clickhouse-client`/`mysql`/`sqlite3`, Elasticsearch write requests, `systemctl` start/stop/restart, `crontab` edits) until an approval flag is recorded (`looper-guard grant <slug>`, valid 8 hours, that session only). Reads always pass. Flags live under `~/.claude/looper-approvals/` and are scoped to `(session_id, task-slug)`, so parallel sessions never affect each other. The `looper-guard` tokens are pseudo-commands the hook intercepts; a returned "deny" whose reason starts with `LOOPER-GUARD` means success, not failure.
+# Guard hook
+cp plugins/looper/hooks/looper-db-guard.py ~/.claude/hooks/
+chmod +x ~/.claude/hooks/looper-db-guard.py
+```
+
+Then add this to the `hooks` block of `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command",
+            "command": "\"$HOME\"/.claude/hooks/looper-db-guard.py",
+            "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Skipping the hook step gives you the loop **without** the guard, so prefer the
+plugin install.
+</details>
+
+## Usage
+
+```
+/looper Fix the flaky retry in worker.py, add a backoff, and cover it with tests.
+```
+
+Looper arms the guard, plans, asks permission if the plan touches a database or
+infrastructure, executes, then validates until clean and disarms.
+
+## Tests
+
+The guard's coverage is an executable spec:
+
+```bash
+python3 plugins/looper/tests/test_guard.py
+```
+
+It asserts the full block/allow matrix, the arm-block-grant-pass-disarm flow, and
+parallel-session isolation. If you find a write that slips through, that is a
+security bug: a failing test case is the ideal report.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "looper",
+  "owner": {
+    "name": "Arvind Abraham",
+    "url": "https://github.com/arvindeybram"
+  },
+  "plugins": [
+    {
+      "name": "looper",
+      "description": "Autonomous plan-execute-validate loop with mandatory file backups and a fail-closed DB/infra permission gate.",
+      "source": "./plugins/looper",
+      "version": "0.1.0",
+      "category": "development",
+      "keywords": ["automation", "agentic-workflows", "validation", "guardrails", "safety"]
+    }
+  ]
+}

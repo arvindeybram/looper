@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "looper",
+  "version": "0.1.0",
+  "description": "Autonomous plan-execute-validate loop. Opus plans (with test strategy + edge-case review), Sonnet executes, then a fresh validator loops until every check passes. Backs up every file it touches and mechanically blocks database/infrastructure writes until you approve them.",
+  "author": {
+    "name": "Arvind Abraham",
+    "url": "https://github.com/arvindeybram"
+  },
+  "homepage": "https://github.com/arvindeybram/looper",
+  "repository": "https://github.com/arvindeybram/looper",
+  "license": "MIT",
+  "keywords": ["automation", "agentic-workflows", "validation", "guardrails", "safety"]
+}

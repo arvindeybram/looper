@@ -1,6 +1,6 @@
 ---
 name: looper
-description: Autonomous plan-execute-validate loop. Opus plans a task (with test strategy and edge-case review), Sonnet executes it, then a validation loop runs until every check passes, with Sonnet fixing any issue found. Use when the user invokes /looper <task> or asks to "run the looper" on a task. Hard guardrail - pauses for explicit user permission before any modification to ClickHouse, MySQL, SQLite, or Elasticsearch table/database content, or to infrastructure. Backs up every existing file before altering it. Also drives loops whose validation gate is a slow external system such as CI, cloud eval, or remote review, self-pacing re-checks via ScheduleWakeup and distinguishing genuine failures from transient infrastructure ones (see Phase 5b).
+description: Autonomous plan-execute-validate loop. Opus plans a task (with test strategy and edge-case review), Sonnet executes it, then a validation loop runs until every check passes, with Sonnet fixing any issue found. Use when the user invokes /looper <task> or asks to "run the looper" on a task. Hard guardrail - pauses for explicit user permission before any modification to ClickHouse, MySQL, Postgres, SQLite, or Elasticsearch table/database content, or to infrastructure. Backs up every existing file before altering it. Also drives loops whose validation gate is a slow external system such as CI, cloud eval, or remote review, self-pacing re-checks via ScheduleWakeup and distinguishing genuine failures from transient infrastructure ones (see Phase 5b).
 ---
 
 # Looper — plan (Opus) → execute (Sonnet) → validate-until-clean
@@ -30,8 +30,8 @@ DONE criteria in Phase 5 are met.
 
 ## Phase 0 — Arm the mechanical guard
 
-A PreToolUse hook (`~/.claude/hooks/looper-db-guard.py`) mechanically blocks
-DB/infra write commands in armed sessions. Flags live in
+A PreToolUse hook shipped with this plugin (`hooks/looper-db-guard.py`)
+mechanically blocks DB/infra write commands in armed sessions. Flags live in
 `~/.claude/looper-approvals/` and are scoped to (session, task), so parallel
 sessions are never affected.
 
@@ -44,9 +44,12 @@ with a DENY whose reason starts with `LOOPER-GUARD`. **A deny that says
 commands: `looper-guard arm <slug>`, `looper-guard grant <slug>`,
 `looper-guard disarm`, `looper-guard status`.
 
-While armed, any write to ClickHouse/MySQL/SQLite/Elasticsearch content or to
-infrastructure (systemctl start/stop/restart/enable/disable, crontab edits) is
-denied by the hook until a grant is recorded. Reads always pass.
+While armed, any write to ClickHouse/MySQL/Postgres/SQLite/Elasticsearch
+content or to infrastructure (systemctl start/stop/restart/enable/disable,
+crontab edits) is denied by the hook until a grant is recorded. Reads always
+pass. The guard is fail-closed: if a DB client is invoked and the SQL is not
+visibly a pure read (it comes from a file, stdin, a non-literal pipe, or
+`--queries-file`/`.read`), it is treated as a write and blocked.
 
 ## Phase 1 — Plan (Opus)
 
@@ -89,8 +92,8 @@ Planning is complete after at most two passes — then move on automatically.
 Inspect the final plan's Touch list. The gate TRIGGERS if any step:
 
 - writes, alters, deletes, truncates, or inserts into **ClickHouse, MySQL,
-  SQLite, or Elasticsearch** table/index/database content (DDL or DML — reads
-  and SELECTs are fine), or
+  Postgres, SQLite, or Elasticsearch** table/index/database content (DDL or DML
+  — reads and SELECTs are fine), or
 - modifies infrastructure: systemd units, cron/timers, nginx/OpenResty config,
   service restarts, package installs on servers, DNS, firewall.
 
@@ -203,11 +206,6 @@ back.
   iteration.
 - **Notify on the events the user asked about** (PushNotification), and only
   those — a completed slow gate is worth a ping; a routine "still queued" is not.
-
-Concrete instance: the `handshake-dynamo` skill drives exactly this pattern
-against the Dynamo review pipeline (static checks → rubric → validation → pass@2
-→ deep_review → ava_review → pass@5 trials → gate), including transient
-`ava_review` infra handling and difficulty-gate hardening.
 
 ## Phase 6 — Disarm and final report
 
